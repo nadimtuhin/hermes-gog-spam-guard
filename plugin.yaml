@@ -1,0 +1,15 @@
+name: gog-spam-guard
+label: "GOG Spam Guard"
+kind: standalone
+version: 0.1.0
+author: nadimtuhin
+homepage: https://github.com/nadimtuhin/gog-spam-guard
+description: >
+  Indirect prompt injection firewall, boundary sanitizer, and server-side Gmail
+  filter automation engine using local gog CLI. Protects agents from malicious email contexts.
+requires_hermes: ">=0.20.0"
+provides_tools:
+  - gog_spam_scan
+  - gog_filter_apply
+provides_hooks:
+  - pre_tool_call

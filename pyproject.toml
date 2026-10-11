@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gog-spam-guard"
+version = "0.1.0"
+description = "Prompt injection firewall and server-side filter generator for Gmail and autonomous AI agents."
+readme = "README.md"
+authors = [{ name = "Omar Faruque Tuhin (Nadim)", email = "nadimtuhin@gmail.com" }]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Communications :: Email",
+]
+keywords = ["prompt-injection", "ai-security", "gmail", "spam-filter", "hermes-agent", "llm-guard"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/nadimtuhin/gog-spam-guard"
+Repository = "https://github.com/nadimtuhin/gog-spam-guard"
+
+[project.scripts]
+gog-spam-guard = "gog_spam_guard.cli:main"
