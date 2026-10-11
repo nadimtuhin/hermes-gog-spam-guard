@@ -4,7 +4,7 @@ jailbreak paradigms, and boundary security test suite for gog-spam-guard.
 """
 
 import unittest
-from gog_spam_guard import (
+from hermes_gog_spam_guard import (
     sanitize_text,
     canonicalize_text,
     desmear_fragmented_words,

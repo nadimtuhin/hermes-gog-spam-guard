@@ -78,8 +78,8 @@ def cmd_validate_query(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="gog-spam-guard",
-        description="Prompt injection firewall and server-side filter generator for Gmail."
+        prog="hermes-gog-spam-guard",
+        description="Prompt injection firewall and server-side Gmail filter generator for Hermes Agent."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
