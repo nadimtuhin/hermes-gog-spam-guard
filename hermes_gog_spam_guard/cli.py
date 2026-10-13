@@ -25,8 +25,8 @@ def cmd_scan(args):
             gog_cmd.extend(["--client", args.client])
         gog_cmd.extend(["gmail", "search", "in:spam", f"--limit={args.limit}", "-j", "--results-only"])
         try:
-            res = subprocess.run(gog_cmd, capture_output=True, text=True, check=True)
-            raw_emails = json.load(res.stdout)
+            res = subprocess.run(gog_cmd, capture_output=True, text=True, check=True, timeout=30)
+            raw_emails = json.loads(res.stdout) if res.stdout.strip() else []
         except Exception as e:
             print(f"Error fetching from gog CLI: {e}", file=sys.stderr)
             sys.exit(1)
@@ -40,7 +40,8 @@ def cmd_scan(args):
         print("\n[!] Quarantined Injection Attempts:")
         for q in result["quarantined"]:
             print(f"  - #{q['id']} From: {q['sender']}")
-            print(f"    Reason: {q['reason']} ({q['matched_pattern']})")
+            rule = q.get('matched_rule') or q.get('matched_pattern')
+            print(f"    Reason: {q['reason']} ({rule})")
             print(f"    Subject: {q['sanitized_subject']}")
 
     # Cluster safe messages

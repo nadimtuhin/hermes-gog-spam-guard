@@ -18,6 +18,9 @@ from .sanitizer import (
     TURN_SPOOFING_RE
 )
 
+# Fail-closed safety boundary: inputs exceeding this limit are quarantined to prevent CPU/ReDoS exhaustion
+MAX_SCAN_CHARS = 50_000
+
 # Raw JSON tool-call / role smuggling
 JSON_TOOL_SPOOF_RE = re.compile(
     r"(?:"
@@ -47,7 +50,7 @@ CONSTRAINT_INVERSION_RE = re.compile(
     re.IGNORECASE
 )
 
-# Multilingual instruction override signatures
+# Multilingual instruction override signatures across 10 languages
 MULTILINGUAL_INJECTION_RE = re.compile(
     r"(?:"
     r"\b(?:ignorier(?:en|e)?|vergiss)\b[^\.\n]{0,40}\b(?:anweisungen|instruktionen|regeln)\b|"
@@ -73,10 +76,10 @@ OOB_EXFIL_RE = re.compile(
     re.IGNORECASE
 )
 
-# Jailbreak paradigms & persona coercion
+# Jailbreak paradigms & persona coercion (bounded to avoid common name false positives)
 JAILBREAK_RE = re.compile(
     r"(?:"
-    r"\b(?:dan|aim|stan|jailbreak|unrestricted mode)\b|"
+    r"\b(?:dan\s+mode|aim\s+mode|stan\s+mode|jailbreak|unrestricted mode)\b|"
     r"\b(?:pretend|roleplay|imagine|act)\s+(?:as\s+)?(?:you are|to be|an?)\s+(?:unrestricted|evil|different|hacker|root|admin)|"
     r"\bhypothetical\s+(?:scenario|situation)\s+where\s+you\s+(?:have\s+no\s+rules|can\s+execute)|"
     r"\bdo\s+anything\s+now\b"
@@ -146,10 +149,10 @@ GOAL_SUBVERSION_RE = re.compile(
     re.IGNORECASE
 )
 
-# Secret harvest and environment variable probing
+# Secret harvest and environment variable probing (bounded regex to prevent ReDoS on large inputs)
 SECRET_HARVEST_RE = re.compile(
     r"(?:"
-    r"\b(?:print|echo|show|output|leak|cat)\s+.*(?:\$[A-Z_]+_KEY|\$[A-Z_]+_TOKEN|\$[A-Z_]+_SECRET|\bprocess\.env\b|\bos\.environ\b|\.env\b)|"
+    r"\b(?:print|echo|show|output|leak|cat)\s+[^\n]{0,80}(?:\$[A-Z_]+_KEY|\$[A-Z_]+_TOKEN|\$[A-Z_]+_SECRET|\bprocess\.env\b|\bos\.environ\b|\.env\b)|"
     r"\b(?:OPENROUTER|ANTHROPIC|OPENAI|GROQ|AWS|GITHUB|GOG)_(?:API_KEY|TOKEN|SECRET)\b"
     r")",
     re.IGNORECASE
@@ -179,22 +182,22 @@ CONVERSATIONAL_SPOOF_RE = re.compile(
     re.IGNORECASE
 )
 
-# Dangerous code fence execution smuggling
+# Dangerous code fence execution smuggling (bounded to prevent catastrophic backtracking)
 CODE_FENCE_EXECUTION_RE = re.compile(
-    r"```(?:bash|sh|zsh|shell|python)?\s*[\s\S]*?(?:curl|wget|rm\s+-rf|os\.system|subprocess\.|exec|eval)[\s\S]*?```",
+    r"```(?:bash|sh|zsh|shell|python)?\s*[^`]{0,2000}?(?:curl|wget|rm\s+-rf|os\.system|subprocess\.|exec|eval)[^`]{0,2000}?```",
     re.IGNORECASE
 )
 
 # Direct prompt injection signatures
 INJECTION_SIGNATURES = [
-    r"(?:disregard|ignore|bypass|drop|delete|forget)\s+(?:all\s+)?(?:prior|previous|past|above|system)\s+(?:instructions|prompts|rules|directives)",
+    r"(?:disregard|ignore|bypass|drop|delete|forget)\s+(?:all\s+)?(?:prior|previous|past|above|system|your)\s+(?:instructions|prompts|rules|directives)",
     r"(?:new|updated|revised)\s+(?:system\s+)?instructions\s*:",
     r"you\s+are\s+now\s+(?:an?\s+)?(?:unrestricted|different|evil|jailbroken|admin|developer|dan)",
     r"system\s*prompt\s*override",
     r"developer\s+mode\s+(?:enabled|activated|on)",
     r"(?:admin|administrator|workspace\s+admin|google\s+security\s+team|nadim)\s+(?:override|notice|alert|order)\s*:",
     r"(?:urgent|important)\s*:\s*(?:do\s+not\s+filter|whitelist\s+this|disable\s+spam\s+filter)",
-    r"\b(?:curl|wget|nc|bash|sh|zsh)\b\s+[\w\.\/\:\-]+",
+    r"\b(?:curl|wget|nc|bash|sh|zsh)\b\s+https?:\/\/[\w\.\/\:\-]+",
     r"\brm\s+-rf\s+[\w\.\/\:\-]+",
     r"(?:send|exfiltrate|print|cat|leak|upload)\s+(?:all\s+)?(?:keys|tokens|passwords|credentials|\.env|id_rsa|keychain|auth\.json)",
     r"create\s+(?:a\s+)?filter\s+to\s+trash\s+everything",
@@ -204,6 +207,24 @@ INJECTION_SIGNATURES = [
 INJECTION_RE = re.compile("|".join(INJECTION_SIGNATURES), re.IGNORECASE)
 
 ACROSTIC_DANGEROUS_WORDS = {"DISREGARD", "IGNORE", "DELETE", "TRASH", "OVERRIDE"}
+
+# Structured heuristic pattern table
+HEURISTIC_TABLE = [
+    ("direct_injection", INJECTION_RE),
+    ("multilingual_injection", MULTILINGUAL_INJECTION_RE),
+    ("canary_extraction_probe", SYSTEM_EXTRACTION_RE),
+    ("constraint_inversion", CONSTRAINT_INVERSION_RE),
+    ("jailbreak_attempt", JAILBREAK_RE),
+    ("tool_abuse", TOOL_ABUSE_RE),
+    ("worm_replication_attempt", WORM_REPLICATION_RE),
+    ("refusal_suppression", REFUSAL_SUPPRESSION_RE),
+    ("memory_poisoning", MEMORY_POISON_RE),
+    ("code_smuggling", CODE_SMUGGLING_RE),
+    ("goal_subversion", GOAL_SUBVERSION_RE),
+    ("secret_harvesting", SECRET_HARVEST_RE),
+    ("credential_form_smuggling", CREDENTIAL_FORM_RE),
+    ("oob_exfiltration", OOB_EXFIL_RE),
+]
 
 
 def calculate_shannon_entropy(data: str) -> float:
@@ -219,23 +240,34 @@ def calculate_shannon_entropy(data: str) -> float:
 
 
 def is_suspicious_high_entropy(text: str) -> bool:
-    """Detect dense random/encrypted blobs (length >= 40, entropy >= 4.9 without spaces)."""
+    """
+    Detect dense random/encrypted blobs (length >= 40, entropy >= 4.9).
+    Excludes standard web URLs to prevent false positives on legitimate tracking tokens.
+    """
     words = text.split()
     for w in words:
+        if w.startswith("http://") or w.startswith("https://"):
+            continue
         if len(w) >= 40 and calculate_shannon_entropy(w) >= 4.9:
             return True
     return False
 
 
 def detect_acrostic_payload(text: str) -> Tuple[bool, Optional[str]]:
-    """Detect acrostic steganography where initials of consecutive words form attack verbs."""
-    words = re.findall(r"\b[A-Za-z]+\b", text)
-    if len(words) < 5:
+    """
+    Detect acrostic steganography: checks if initial letters of consecutive lines
+    form dangerous attack verbs (DISREGARD, IGNORE, DELETE, TRASH, OVERRIDE).
+    Restricted to line starts to prevent false positives on title-cased sentences.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 4:
         return False, None
-    initials = "".join([w[0].upper() for w in words])
+
+    line_initials = "".join([line[0].upper() for line in lines if line[0].isalpha()])
     for target in ACROSTIC_DANGEROUS_WORDS:
-        if target in initials:
+        if target in line_initials:
             return True, f"acrostic_payload: {target}"
+
     return False, None
 
 
@@ -243,77 +275,24 @@ def _has_injection_heuristics(text: str) -> Tuple[bool, Optional[str]]:
     """Evaluate text heuristics against known injection, jailbreak, and abuse patterns."""
     multi_raw_match = MULTILINGUAL_INJECTION_RE.search(text)
     if multi_raw_match:
-        return True, f"multilingual_injection: {multi_raw_match.group(0)}"
+        return True, "multilingual_injection"
 
     sanitized = sanitize_text(text)
 
-    match = INJECTION_RE.search(sanitized)
-    if match:
-        return True, match.group(0)
-
-    multi_match = MULTILINGUAL_INJECTION_RE.search(sanitized)
-    if multi_match:
-        return True, f"multilingual_injection: {multi_match.group(0)}"
-
-    extract_match = SYSTEM_EXTRACTION_RE.search(sanitized)
-    if extract_match:
-        return True, f"canary_extraction_probe: {extract_match.group(0)}"
-
-    neg_match = CONSTRAINT_INVERSION_RE.search(sanitized)
-    if neg_match:
-        return True, f"constraint_inversion: {neg_match.group(0)}"
-
-    jb_match = JAILBREAK_RE.search(sanitized)
-    if jb_match:
-        return True, f"jailbreak_attempt: {jb_match.group(0)}"
-
-    tool_match = TOOL_ABUSE_RE.search(sanitized)
-    if tool_match:
-        return True, f"tool_abuse: {tool_match.group(0)}"
-
-    worm_match = WORM_REPLICATION_RE.search(sanitized)
-    if worm_match:
-        return True, f"worm_replication_attempt: {worm_match.group(0)}"
-
-    refusal_match = REFUSAL_SUPPRESSION_RE.search(sanitized)
-    if refusal_match:
-        return True, f"refusal_suppression: {refusal_match.group(0)}"
-
-    mem_match = MEMORY_POISON_RE.search(sanitized)
-    if mem_match:
-        return True, f"memory_poisoning: {mem_match.group(0)}"
-
-    code_match = CODE_SMUGGLING_RE.search(sanitized)
-    if code_match:
-        return True, f"code_smuggling: {code_match.group(0)}"
-
-    goal_match = GOAL_SUBVERSION_RE.search(sanitized)
-    if goal_match:
-        return True, f"goal_subversion: {goal_match.group(0)}"
-
-    secret_match = SECRET_HARVEST_RE.search(sanitized)
-    if secret_match:
-        return True, f"secret_harvesting: {secret_match.group(0)}"
-
-    cred_match = CREDENTIAL_FORM_RE.search(sanitized)
-    if cred_match:
-        return True, f"credential_form_smuggling: {cred_match.group(0)}"
-
-    oob_match = OOB_EXFIL_RE.search(sanitized)
-    if oob_match:
-        return True, f"oob_exfiltration: {oob_match.group(0)}"
+    # Evaluate structured heuristic table
+    for label, pattern in HEURISTIC_TABLE:
+        if pattern.search(sanitized):
+            return True, label
 
     desmeared = desmear_fragmented_words(sanitized)
     if desmeared != sanitized:
-        desmear_match = INJECTION_RE.search(desmeared)
-        if desmear_match:
-            return True, f"fragmented_injection: {desmear_match.group(0)}"
+        if INJECTION_RE.search(desmeared):
+            return True, "fragmented_injection"
 
     leeted = sanitized.translate(LEET_TRANS)
     if leeted != sanitized:
-        leet_match = INJECTION_RE.search(leeted)
-        if leet_match:
-            return True, f"leetspeak_injection: {leet_match.group(0)}"
+        if INJECTION_RE.search(leeted):
+            return True, "leetspeak_injection"
 
     return False, None
 
@@ -323,20 +302,24 @@ def detect_encoded_payload(text: str) -> Tuple[bool, Optional[str]]:
     if not text:
         return False, None
 
+    # Handle URL percent-encoding (including double URL-encoding %25XX)
     if "%" in text:
-        try:
-            unquoted = urllib.parse.unquote(text)
-            if unquoted != text:
-                has_inj, pat = _has_injection_heuristics(unquoted)
-                if has_inj:
-                    return True, f"url_encoded_injection: {pat}"
-        except Exception:
-            pass
+        unquoted = urllib.parse.unquote(text)
+        if "%" in unquoted:
+            unquoted = urllib.parse.unquote(unquoted)
+        if unquoted != text:
+            has_inj, pat = _has_injection_heuristics(unquoted)
+            if has_inj:
+                return True, f"url_encoded_injection: {pat}"
 
+    # Handle Base64 strings (with and without padding)
     b64_matches = re.findall(r"(?:^|(?<=\s))[A-Za-z0-9+/]{16,}={0,2}(?=\s|$|[.,;!])", text)
     for blob in b64_matches:
         try:
-            decoded = base64.b64decode(blob, validate=True).decode("utf-8", errors="ignore")
+            # Handle unpadded strings by adding padding if required
+            missing_padding = len(blob) % 4
+            padded_blob = blob + ("=" * (4 - missing_padding)) if missing_padding else blob
+            decoded = base64.b64decode(padded_blob, validate=False).decode("utf-8", errors="ignore")
             if len(decoded) > 10:
                 has_inj, pat = _has_injection_heuristics(decoded)
                 if has_inj:
@@ -344,6 +327,7 @@ def detect_encoded_payload(text: str) -> Tuple[bool, Optional[str]]:
         except Exception:
             continue
 
+    # Handle 8-bit binary streams
     binary_matches = re.findall(r"(?:[01]{8}\s+){3,}[01]{8}", text)
     for b_str in binary_matches:
         try:
@@ -356,6 +340,7 @@ def detect_encoded_payload(text: str) -> Tuple[bool, Optional[str]]:
         except Exception:
             continue
 
+    # Handle ROT13 cipher
     words = text.split()
     if len(words) >= 3:
         try:
@@ -366,6 +351,7 @@ def detect_encoded_payload(text: str) -> Tuple[bool, Optional[str]]:
         except Exception:
             pass
 
+    # Handle reversed text
     if len(words) >= 3:
         has_rev_inj, rev_pat = _has_injection_heuristics(text[::-1])
         if has_rev_inj:
@@ -376,6 +362,7 @@ def detect_encoded_payload(text: str) -> Tuple[bool, Optional[str]]:
         if has_pw_inj:
             return True, f"reverse_text_injection: {pw_pat}"
 
+    # Handle whitespace steganography runs
     if re.search(r"[ \t]{8,}$", text, re.MULTILINE):
         return True, "whitespace_steganography"
 
@@ -385,9 +372,13 @@ def detect_encoded_payload(text: str) -> Tuple[bool, Optional[str]]:
 def detect_prompt_injection(text: str) -> Tuple[bool, Optional[str]]:
     """
     Comprehensive multi-layer prompt injection detection.
+    Fails closed if payload exceeds MAX_SCAN_CHARS.
     """
     if not text:
         return False, None
+
+    if len(text) > MAX_SCAN_CHARS:
+        return True, "oversized_payload"
 
     if TRAJECTORY_POISONING_RE.search(text):
         return True, "trajectory_poisoning"
@@ -428,7 +419,10 @@ def detect_prompt_injection(text: str) -> Tuple[bool, Optional[str]]:
 
 
 def process_spam_batch(raw_emails: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Sanitize incoming spam emails, flag injection attempts, and separate clean metadata."""
+    """
+    Sanitize incoming spam emails, flag injection attempts, and separate clean metadata.
+    Scans sender header, subject, and body. Sanitizes outgoing metadata to prevent payload echo.
+    """
     safe_emails = []
     quarantined = []
 
@@ -437,15 +431,16 @@ def process_spam_batch(raw_emails: List[Dict[str, Any]]) -> Dict[str, Any]:
         raw_body = email.get("content", "")
         sender = email.get("sender", "")
 
+        sender_inj, sender_pat = detect_prompt_injection(sender)
         subj_inj, subj_pat = detect_prompt_injection(raw_subj)
         body_inj, body_pat = detect_prompt_injection(raw_body)
 
-        if subj_inj or body_inj:
+        if sender_inj or subj_inj or body_inj:
             quarantined.append({
                 "id": email.get("id"),
-                "sender": sanitize_text(sender),
+                "sender": sanitize_text(sender)[:100],
                 "reason": "prompt_injection_detected",
-                "matched_pattern": subj_pat or body_pat,
+                "matched_rule": sender_pat or subj_pat or body_pat,
                 "sanitized_subject": sanitize_text(raw_subj)[:100]
             })
             continue

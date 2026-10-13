@@ -52,8 +52,8 @@ def _tool_gog_spam_scan(args, **_kwargs):
     cmd.extend(["gmail", "search", "in:spam", f"--limit={limit}", "-j", "--results-only"])
 
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        raw_emails = json.loads(res.stdout)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        raw_emails = json.loads(res.stdout) if res.stdout.strip() else []
     except Exception as e:
         return json.dumps({"success": False, "error": f"Failed to fetch from gog: {str(e)}"})
 

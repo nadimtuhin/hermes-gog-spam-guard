@@ -6,9 +6,16 @@ import html
 import re
 import unicodedata
 
-# Zero-width, BiDi overrides, formatting, control characters, soft hyphens, combining diacritics (Zalgo), and Plane 14 invisible tags
-ZERO_WIDTH_AND_BIDI_RE = re.compile(
-    r"[\u200B-\u200D\uFEFF\u202A-\u202E\u2066-\u2069\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u0300-\u036F\U000E0000-\U000E007F]"
+# Comprehensive invisible marks: zero-width, BiDi overrides, soft hyphens,
+# word joiners (U+2060-U+2064), Mongolian vowel separator (U+180E), variation selectors (U+FE00-U+FE0F),
+# and Plane 14 invisible tag characters (U+E0000-U+E007F, U+E0100-U+E01EF).
+INVISIBLE_AND_CONTROL_RE = re.compile(
+    r"["
+    r"\u200B-\u200F\u2060-\u2064\uFEFF\u202A-\u202E\u2066-\u2069"
+    r"\u180E\uFE00-\uFE0F"
+    r"\U000E0000-\U000E007F\U000E0100-\U000E01EF"
+    r"\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\xAD"
+    r"]"
 )
 
 # Common Cyrillic and Greek homoglyphs mapped to ASCII equivalents
@@ -66,14 +73,13 @@ TURN_SPOOFING_RE = re.compile(
 
 # Agent trajectory markers (scratchpad hijacking)
 TRAJECTORY_POISONING_RE = re.compile(
-    r"(?:^|\n)\s*(?:"
-    r"Thought\s*:|"
-    r"Action\s*:\s*(?:terminal|execute_code|bash|sh|browser|write_file)|"
-    r"Action\s*Input\s*:|"
-    r"Observation\s*:|"
-    r"Tool\s*Result\s*:|"
-    r"Assistant\s*:|"
-    r"Agent\s*Response\s*:"
+    r"(?:"
+    r"(?:^|\n)\s*Thought\s*:[^\n]*\n\s*Action\s*:|"
+    r"(?:^|\n)\s*Action\s*:\s*(?:terminal|execute_code|bash|sh|browser|write_file|patch|read_file)|"
+    r"(?:^|\n)\s*Action\s*Input\s*:|"
+    r"(?:^|\n)\s*Observation\s*:|"
+    r"(?:^|\n)\s*Tool\s*Result\s*:|"
+    r"(?:^|\n)\s*Agent\s*Response\s*:"
     r")",
     re.IGNORECASE
 )
@@ -92,16 +98,20 @@ def desmear_fragmented_words(text: str) -> str:
 def canonicalize_text(text: str) -> str:
     """
     Apply full canonicalization:
-      1. Unicode NFKC normalization
-      2. Cyrillic and Greek homoglyph substitution to ASCII
-      3. Strip zero-width, BiDi, and Plane 14 invisible tag controls
+      1. Decompose via NFKD to split combining diacritics and accents
+      2. Strip all combining marks and Zalgo characters
+      3. Strip all zero-width, invisible tags (Plane 14), and BiDi overrides
+      4. Normalize back to NFKC
+      5. Substitute Cyrillic and Greek homoglyphs to ASCII
     """
     if not text:
         return ""
-    norm = unicodedata.normalize("NFKC", text)
-    unconfused = norm.translate(CONFUSABLES_TRANS)
-    cleaned = ZERO_WIDTH_AND_BIDI_RE.sub("", unconfused)
-    return cleaned
+    decomposed = unicodedata.normalize("NFKD", text)
+    without_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    visible = INVISIBLE_AND_CONTROL_RE.sub("", without_marks)
+    normalized = unicodedata.normalize("NFKC", visible)
+    unconfused = normalized.translate(CONFUSABLES_TRANS)
+    return unconfused
 
 
 def unescape_all_entities(text: str) -> str:
@@ -134,10 +144,13 @@ def sanitize_notification_output(text: str) -> str:
     """
     Dual-sided firewall: sanitize agent summary text before delivery to Telegram or channels.
     Strips raw markdown image embeds, dangerous javascript/data links, and unescaped HTML.
+    Also strips sensitive query parameters from tracking URLs to prevent silent exfiltration.
     """
     if not text:
         return ""
-    cleaned = re.sub(r"!\[.*?\]\(.*?\)", "[IMAGE REMOVED]", text)
-    cleaned = re.sub(r"\[([^\]]+)\]\((?:javascript|data|vbscript):[^\)]*\)", r"\1", cleaned)
-    cleaned = re.sub(r"<\/?(?:script|iframe|embed|object|meta)[^>]*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"!\[.*?\]\([\s\S]*?\)", "[IMAGE REMOVED]", text)
+    cleaned = re.sub(r"\[([^\]]+)\]\((?i:(?:javascript|data|vbscript)):[^\)]*\)", r"\1", cleaned)
+    cleaned = re.sub(r"<\/?(?i:(?:script|iframe|embed|object|meta))[^>]*>", "", cleaned)
+    # Strip tracking query strings from external markdown links
+    cleaned = re.sub(r"\[([^\]]+)\]\(https?:\/\/[^\s\)]+\?[^\s\)]*\)", r"\1 [link sanitized]", cleaned)
     return cleaned
