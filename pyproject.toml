@@ -29,3 +29,7 @@ Repository = "https://github.com/nadimtuhin/hermes-gog-spam-guard"
 [project.scripts]
 hermes-gog-spam-guard = "hermes_gog_spam_guard.cli:main"
 gog-spam-guard = "hermes_gog_spam_guard.cli:main"
+
+[tool.setuptools]
+# Explicit list: automatic flat-layout discovery fails on the top-level assets/ dir.
+packages = ["hermes_gog_spam_guard"]

@@ -8,13 +8,16 @@ import unicodedata
 
 # Comprehensive invisible marks: zero-width, BiDi overrides, soft hyphens,
 # word joiners (U+2060-U+2064), Mongolian vowel separator (U+180E), variation selectors (U+FE00-U+FE0F),
-# and Plane 14 invisible tag characters (U+E0000-U+E007F, U+E0100-U+E01EF).
+# Plane 14 invisible tag characters (U+E0000-U+E007F, U+E0100-U+E01EF), and lone surrogates.
 INVISIBLE_AND_CONTROL_RE = re.compile(
     r"["
     r"\u200B-\u200F\u2060-\u2064\uFEFF\u202A-\u202E\u2066-\u2069"
     r"\u180E\uFE00-\uFE0F"
     r"\U000E0000-\U000E007F\U000E0100-\U000E01EF"
     r"\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\xAD"
+    # Lone UTF-16 surrogates (e.g. an emoji cut in half by a truncated JSON string)
+    # cannot be encoded to UTF-8 and crash printing or downstream encoding.
+    r"\uD800-\uDFFF"
     r"]"
 )
 
@@ -45,7 +48,9 @@ MODEL_TOKENS_RE = re.compile(
     r"|\[\/?INST\]|<<\/?SYS>>|<\/?s>|<start_of_turn>|<end_of_turn>"
     r"|\n\nHuman:|\n\nAssistant:"
     r"|\[\/?(?:SYSTEM|OUT-OF-BAND|OUT-OF-BAND USER MESSAGE|HUMAN|ASSISTANT|ADMIN|USER|INSTRUCTION|CONTEXT)[^\]]*\]"
-    r"|<\/?(?:system|instruct|instruction|prompt|context|admin|tool_call|tool_result)[^>]*>"
+    # Tag name must end at whitespace, '/' or '>' so sender addresses such as
+    # "<admin@bank.com>" or "<system@github.com>" are not mistaken for role tags.
+    r"|<\/?(?:system|instruct|instruction|prompt|context|admin|tool_call|tool_result)(?:[\s/][^>]*)?>"
     r"|```"
     r")",
     re.IGNORECASE
