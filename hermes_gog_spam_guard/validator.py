@@ -11,6 +11,9 @@ NEGATION_RE = re.compile(r'(?:^|[\s(])-')
 BROAD_OPERATOR_RE = re.compile(r'\*|\b(?:in|is|larger|smaller|after|before|older_than|newer_than|has|label|category):', re.I)
 ANCHOR_RE = re.compile(r'\b(?:from|subject):', re.I)
 FORBIDDEN_SHELL_CHARS = [";", "`", "$", "\n", "\r", "\\", "{", "}", "<", ">"]
+# Filter actions that move matching mail out of sight (trash, out of the inbox, or
+# marked read). These must pass the inbox dry-run before a filter is created.
+MAIL_HIDING_ACTIONS = {"--trash", "--archive", "--mark-read"}
 
 
 def validate_gmail_query(query: str) -> Tuple[bool, str]:
@@ -139,19 +142,20 @@ def execute_safe_filter_create(
 ) -> Dict[str, Any]:
     """
     Execute filter creation safely via subprocess (shell=False).
-    Runs inbox dry-run check before applying destructive '--trash' actions.
+    Runs inbox dry-run check before applying any mail-hiding action
+    ('--trash', '--archive', '--mark-read').
     """
     valid, args, reason = build_safe_gog_args(query, action, client)
     if not valid:
         return {"success": False, "error": reason}
 
-    # Pre-flight inbox safety check for destructive trash actions
-    if action == "--trash" and not skip_dry_run:
+    # Pre-flight inbox safety check for actions that would hide legitimate mail
+    if action in MAIL_HIDING_ACTIONS and not skip_dry_run:
         safe, count, msg = check_inbox_dry_run(query, client)
         if not safe:
             return {
                 "success": False,
-                "error": f"Refusing to apply --trash filter: {msg}. Query would affect legitimate mail."
+                "error": f"Refusing to apply {action} filter: {msg}. Query would affect legitimate mail."
             }
 
     try:
